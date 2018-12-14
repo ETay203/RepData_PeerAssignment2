@@ -10,6 +10,9 @@ The basic goal of this assignment was to explore the NOAA Storm Database and ans
 
 2. Across the United States, which types of events have the greatest economic consequences?
 
+### Data
+The original data file given for this assignment is very large, but can be downloaded [here](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2)
+
 
 **For the assignment my report was published on rpubs.com  [here](http://rpubs.com/ETay203/226655)**
 
