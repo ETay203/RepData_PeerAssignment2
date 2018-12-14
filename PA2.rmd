@@ -1,0 +1,320 @@
+---
+title: "Determining the most harmful extreme weather events with respect to population health and economics across the United States"
+author: "ETaylor"
+date: "4 November 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Synopsis
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. The database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, property damage as well as damage to crops.
+
+Using this data it was found that across the United States, Heat and Tornados are most harmful with respect to population health. It was also found that, across the United States,  Floods, Drought and Hurricanes have the greatest economic consequences.
+
+##Data Processing
+The data for this project was downloaded from the [coursera website](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2).
+
+The data comes in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. The following code chunk reads in the data (warning: this is a large data set and will take some time):
+
+```{r cache=TRUE}
+StormData_Full<-read.csv("StormData.csv.bz2", stringsAsFactors = FALSE)
+```
+Quite a bit of preprocessing of the data was required to tidy the data. Firstly, in order to help speed up the analysis, the large data set was reduced to only the variables (i.e. columns of data) relevant for this report. For this purpose, only the following variables were kept: BGN_DATE, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, and CROPDMGEXP. Secondly all entries with no value for any of those categories can also be eliminated.
+
+``` {r cache=TRUE}
+StormData<-StormData_Full[,c(2,8,23:28)]
+StormData<-StormData[!(StormData$FATALITIES==0 & StormData$INJURIES==0 & StormData$PROPDMG==0 & StormData$CROPDMG==0),]
+
+
+```
+###Dates
+The data contains information on events from January 1950 to November 2011. As detailed on the [NOAA website](https://www.ncdc.noaa.gov/stormevents/details.jsp), initially only data on Tornados was recorded, then from January 1955, the events Thuderstorm Wind and Hail were added. Only from 1996 were the remaining types of events added.  In order to assess the true effect of all event types only data from 1996 onwards will be included in this report.
+
+The dates given under column heading "BGN_DATE" were first converted to a date class, and an additional column listing only the year in which each event occured is added.
+
+```{r cache=TRUE}
+#convert BGN_Date to a date class  and add a column of just years.
+StormData$BGN_DATE<-as.Date(StormData$BGN_DATE, format = "%m/%d/%Y")
+StormData$YEAR<-format(StormData$BGN_DATE,"%Y")
+StormData$YEAR<-as.numeric(StormData$YEAR)
+
+StormData_96<-StormData[StormData$YEAR>="1996",]
+```
+
+###Event Types
+A definitive list of event types can be found on the NOAA website [here](http://www.ncdc.noaa.gov/stormevents/choosedates.jsp?statefips=-999%2CALL).
+
+This online list gives 49 different event types (this includes the event "Sneakerwave", which is missing from the 48 events given in the supporting [pdf documentaion](http://www.ncdc.noaa.gov/stormevents/pd01016005curr.pdf)).
+However if we request the number of unique events given in the unprocessed storm data there are `r length(unique(StormData_Full$EVTYPE))`.
+The event types under the column heading "EVTYPE" are therefore messy, there are a number of mispellings, abbreviations and a mixture of upper and lowercase. This leads to many types of events being listed multiple times. 
+
+In order to tidy the events given in "EVTYPE", the list of events is extracted from the NOAA website and parsed to generate R structure data. A function of xpath commands is used to get and tidy the list.
+
+```{r }
+#Generating the list of 49 events
+library("XML")
+url<-"http://www.ncdc.noaa.gov/stormevents/choosedates.jsp?statefips=-999%2CALL"
+xml_events<-htmlTreeParse(url, useInternalNodes = TRUE)
+
+r = xmlRoot(xml_events)
+
+get_events <-function(xdata){
+        Fun <- function(x){
+                xname <- xmlName(x)
+                xattrs <- xmlAttrs(x)
+                c(sapply(xmlChildren(x), xmlValue), name = xname, xattrs)
+        }
+        as.data.frame(t(xpathSApply(r, "//*/select", Fun)), stringsAsFactors = FALSE)
+}
+
+event_list<-get_events(r)
+event_list<-data.frame(event_list[,2])
+event_list<-data.frame(event_list[1:49,1])
+event_list<-data.frame(sapply(event_list, toupper))
+names(event_list)<-"Types"
+```
+
+Common mispellings, abbreviations and incorrect labels are corrected.  The event list can then be used to match against those given in the data.  Some entries under EVTYPE are however consequenses of events (e.g. beach erosion, dam break, drowning, hyperthermia, marine accident) and not a type of weather event. These are too ambiguous to relabel and have therefore been removed, as well as the event type given as "other".
+
+```{r cache=TRUE}
+library(stringdist)
+library(stringr)
+#convert EVTYPE to all uppercase
+StormData_96$EVTYPE = sapply(StormData_96$EVTYPE, toupper)
+#common replacements
+StormData_96$EVTYPE<-gsub("^+ +", "", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("TSTM", "THUNDERSTORM", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^THUNDERSTORM$", "THUNDERSTORM WIND", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^THUNDERSTORM WIND+ +(.*)", "THUNDERSTORM WIND", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^THUNDERSTORM WIND+(.*)", "THUNDERSTORM WIND", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("WHIRLWIND", "THUNDERSTORM WIND", StormData_96$EVTYPE)
+
+
+StormData_96$EVTYPE<-gsub("(.*)+FREEZE+(.*)", "FROST", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("FROST", "FROST/FREEZE", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)FROST(.*)", "FROST/FREEZE", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("IC+(.*)+ROAD(.*)", "FROST/FREEZE", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("BLACK ICE", "FROST/FREEZE", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("(.*)+COASTAL+(.*)", "COASTAL FLOOD", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)+CSTL+(.*)", "COASTAL FLOOD", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("TIDAL FLOODING", "COASTAL FLOOD", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("ASTRONOMICAL HIGH TIDE", "COASTAL FLOOD", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("(.*)+EXTREME+(.*)", "EXTREME COLD/WIND CHILL", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)+EXTENDED+(.*)", "EXTREME COLD/WIND CHILL", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("UN+(.*)+COLD", "EXTREME COLD/WIND CHILL", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^COLD+(.*)", "COLD/WIND CHILL", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)FLASH(.*)", "FLASH FLOOD", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("HURRICANE(.*)", "HURRICANE", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("TYPHOON", "HURRICANE", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("HURRICANE", "HURRICANE (TYPHOON)", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)RAIN(.*)", "RAIN", StormData_96$EVTYPE)
+#PRECIPITATION reclassified as Heavy Rain
+StormData_96$EVTYPE<-gsub("(.*)+PRECIP(.*)", "RAIN", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("RAIN", "HEAVY RAIN", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("(.*)HAIL", "HAIL", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("LIGHT SNOW(.*)", "SLEET", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^WIN+(.*)+MIX", "WINTER WEATHER", StormData_96$EVTYPE)
+#FREEZING DRIZZLE/SPRAY and GLAZE reclassified as WINTER WEATHER
+StormData_96$EVTYPE<-gsub("^FREEZING+ +[^F].*", "WINTER WEATHER", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("GLAZE", "WINTER WEATHER", StormData_96$EVTYPE)
+
+#StormData_96$EVTYPE<-gsub("[^LAK].*+SNOW+(.*)", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^SNOW+(.*)", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("EXCESSIVE SNOW", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("BLOWING SNOW", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("FALLING SNOW(.*)", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("LATE SEASON SNOW(.*)", "HEAVY SNOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("^HEAVY SNOW(.*)", "HEAVY SNOW", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("(.*)+SURF+(.*)", "HIGH SURF", StormData_96$EVTYPE)
+#HEAVY, HIGH AND ROUGH SEAS reclassified as HIGH SURF
+StormData_96$EVTYPE<-gsub("(.*)+SEAS", "HIGH SURF", StormData_96$EVTYPE)
+#HIGH SWELLS AND HIGH WATER reclassified as HIGH SURF
+StormData_96$EVTYPE<-gsub("HIGH SWELLS", "HIGH SURF", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("HIGH WATER", "HIGH SURF", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("(.*)+FIRE", "WILDFIRE", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("NON+(.*)+WIND(.*)", "HIGH WIND", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("HIGH WIND(.*)", "HIGH WIND", StormData_96$EVTYPE)
+#GUSTY WIND reclassified as Strong wind
+StormData_96$EVTYPE<-gsub("^G+(.*)+WIND(.*)", "STRONG WIND", StormData_96$EVTYPE)
+#WIND AND WAVE reclassified as MARINE STRONG WIND
+StormData_96$EVTYPE<-gsub("WIND AND WAVE", "MARINE STRONG WIND", StormData_96$EVTYPE)
+#WIND reclassified as STRONG WIND
+StormData_96$EVTYPE<-gsub("^WIND(.*)", "STRONG WIND", StormData_96$EVTYPE)
+
+#RIVER FLOODING reclassified as Flood 
+StormData_96$EVTYPE<-gsub("^R(.*)FLOOD(.*)", "FLOOD", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)+ +FLD", "FLOOD", StormData_96$EVTYPE)
+#WARM weather reclassified as heat
+StormData_96$EVTYPE<-gsub("(.*)+WARM+(.*)", "HEAT", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("(.*)+HEAT+(.*)", "HEAT", StormData_96$EVTYPE)
+#ROGUE WAVE reclassified as SNEAKERWAVE
+StormData_96$EVTYPE<-gsub("ROGUE WAVE", "SNEAKERWAVE", StormData_96$EVTYPE)
+
+StormData_96$EVTYPE<-gsub("^STORM SURGE$", "STORM SURGE/TIDE", StormData_96$EVTYPE)
+
+#OTHER RECLASSIFICATIONS
+StormData_96$EVTYPE<-gsub("BLOWING DUST", "DUST STORM", StormData_96$EVTYPE)
+#as per documentation, Downburst, wet and dry microbursts will be reclassified as Thunderstorm wind
+StormData_96$EVTYPE<-gsub("(.*)BURST", "THUNDERSTORM WIND", StormData_96$EVTYPE)
+#LANDSLIDE, MUDSLIDE reclassified to DEBRIS FLOW
+StormData_96$EVTYPE<-gsub("(.*)SLIDE(.*)", "DEBRIS FLOW", StormData_96$EVTYPE)
+StormData_96$EVTYPE<-gsub("LANDSLUMP", "DEBRIS FLOW", StormData_96$EVTYPE)
+#LANDSPOUT = TORNADO
+StormData_96$EVTYPE<-gsub("LANDSPOUT", "TORNADO", StormData_96$EVTYPE)
+#FOG = DENSE FOG
+StormData_96$EVTYPE<-gsub("^FOG", "DENSE FOG", StormData_96$EVTYPE)
+
+#match and replace from the event list
+StormData_96$match<-amatch(StormData_96$EVTYPE,event_list$Types, nomatch = NA, maxDist =1, method = "lv")
+StormData_96$matchValue<-event_list[StormData_96$match,]
+StormData_96$matchValue<-as.character(StormData_96$matchValue)
+StormData_96<- within(StormData_96, EVTYPE <- ifelse(is.na(matchValue), EVTYPE, matchValue))
+#eliminate all other non matching/ambiguous event types (as explained in report)
+StormData_96$X<-ifelse(is.na(StormData_96$match),0,1)
+StormData_96<-StormData_96[StormData_96$X==1,]
+StormData_96<-StormData_96[,1:9]
+                       
+```
+
+
+###Property and Crop Damage values
+
+In order to assess the economic impact of each extreme weather event we need the total cost of crop and property damage.  Crop damage is given by 'CROPDMG' and it has an exponent value given in 'CROPDMGEXP'. For property damage it is given by 'PROPDMG' and 'PROPDMGEXP'. 
+
+The exponent values are given by letters and numbers which need to be converted to their full numeric value. B or b = Billion, M or m = Million, K or k = Thousand, H or h = Hundred. 
+
+```{r}
+#B or b = Billion
+StormData_96$PROPDMGEXP<-gsub("[Bb]", "1000000000", StormData_96$PROPDMGEXP)
+StormData_96$CROPDMGEXP<-gsub("[Bb]", "1000000000", StormData_96$CROPDMGEXP)
+# M or m = Million
+StormData_96$PROPDMGEXP<-gsub("[Mm]", "1000000", StormData_96$PROPDMGEXP)
+StormData_96$CROPDMGEXP<-gsub("[Mm]", "1000000", StormData_96$CROPDMGEXP)
+# K or k = Thousand
+StormData_96$PROPDMGEXP<-gsub("[Kk]", "1000", StormData_96$PROPDMGEXP)
+StormData_96$CROPDMGEXP<-gsub("[Kk]", "1000", StormData_96$CROPDMGEXP)
+# H or h = Hundred
+StormData_96$PROPDMGEXP<-gsub("[Hh]", "100", StormData_96$PROPDMGEXP)
+StormData_96$CROPDMGEXP<-gsub("[Hh]", "100", StormData_96$CROPDMGEXP)
+
+StormData_96$PROPDMGEXP<-as.numeric(StormData_96$PROPDMGEXP)
+StormData_96$CROPDMGEXP<-as.numeric(StormData_96$CROPDMGEXP)
+
+StormData_96$PROP_VAL<-StormData_96$PROPDMG * StormData_96$PROPDMGEXP
+StormData_96$CROP_VAL<-StormData_96$CROPDMG * StormData_96$CROPDMGEXP
+        
+
+```
+In the full dataset, both exponents also contained numbers from one to ten as well as symbols "-", "+" and "?".  It is unclear in the documentation exactly what these represent.  However once the data was subset to only account for data post 1996, no entries containing these numeric or symbol exponents still included.
+
+
+
+##Results
+The first question we wish to address in this analysis is which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health across the US.  This can be interpreted as which events cause the most fatalities or injuries.  The data gives the number of fatalities and injuries for each event across many locations in the US and times between 1996-2011.  By grouping the data by each type of event for each year the mean number of fatalities and injuries that occur each year can be calculated. 
+
+```{r}
+library(dplyr)
+
+#total fatalities per year for each event
+sum_fatal_events <-
+        StormData_96 %>%
+        group_by(EVTYPE, YEAR)%>%
+        summarize(total_per_year = sum(FATALITIES))
+#mean no. of fatalities per year for each event      
+mean_fatal<-
+        sum_fatal_events%>%
+        group_by(EVTYPE)%>%
+        summarize(mean = mean(total_per_year))%>%
+        filter(mean>10)  %>%
+        arrange(desc(mean))
+#total injuries per year for each event
+sum_injury_events<-
+        StormData_96 %>%
+        group_by(EVTYPE,YEAR) %>%
+        summarize(total_per_year = sum(INJURIES))
+#mean no of injuries per year for each event
+mean_injury<-
+        sum_injury_events%>%
+        group_by(EVTYPE)%>%
+        summarize(mean = mean(total_per_year))%>%
+        filter(mean>50)%>%
+        arrange(desc(mean))
+```
+Since we're only interested in the most harmful events, the code given also filters the number of fatalities and injuries returned.  For the fatalities, only events with a mean number of fatalities per year greater than 10 are given.  For injuries, only events with a mean number of injuries per year greater than 50 are given.  
+
+A dot chart displays the results.
+
+```{r}
+par(mfrow =c(1,2),oma=c(0,0,3,0))
+dotchart(mean_fatal$mean,labels=mean_fatal$EVTYPE,cex=.7,
+         main="Fatalities", 
+         xlab="Mean fatalities per year (1996-2011)")
+
+dotchart(mean_injury$mean,labels=mean_injury$EVTYPE,cex=.7,
+         main="Injuries", 
+         xlab="Mean injuries per year (1996-2011)")
+title("Weather events causing the most 
+      fatalities and injuries across the US", outer =TRUE)
+```
+
+
+The dot charts plotted show the events causing, on average, the most fatalities and injuries per year across the US. Heat and Tornados appear to be the worst events for human health.
+
+In a similar way we can calculate the mean cost per year of damage to property and crops.  Events causing a mean property damage greater than 10 Million US dollars are illustrated, as are events causing a mean crop damage greater than 10 Thousand US dollars .
+
+```{r}
+sum_prop <-
+        StormData_96 %>%
+        group_by(EVTYPE, YEAR)%>%
+        summarize(total_per_year = sum(PROP_VAL, na.rm=TRUE))
+#mean cost per year of damage to each property     
+mean_prop<- sum_prop%>%
+        group_by(EVTYPE)%>%
+        summarize(mean = mean(total_per_year))%>%
+        filter(mean>10000000)  %>%
+        arrange(desc(mean))
+#total cost of damage to crops per year for each event
+sum_crop<-
+        StormData_96 %>%
+        group_by(EVTYPE,YEAR) %>%
+        summarize(total_per_year = sum(CROP_VAL, na.rm=TRUE))
+#mean cost per year of damage to crops for each event
+mean_crop<-
+        sum_crop%>%
+        group_by(EVTYPE)%>%
+        summarize(mean = mean(total_per_year))%>%
+        filter(mean>100000)%>%
+        arrange(desc(mean))
+
+```
+
+Again a dot chart shows the events that cause, on average, the most damage to crops and property.
+
+```{r}
+par(mfrow =c(1,2),oma=c(0,0,3,0))
+dotchart(mean_prop$mean,labels=mean_prop$EVTYPE,cex=.7,
+         main="Property damage", 
+         xlab="Mean cost per year (1996-2011)")
+
+dotchart(mean_crop$mean,labels=mean_crop$EVTYPE,cex=.7,
+         main="Crop damage",          
+         xlab="Mean cost per year (1996-2011)")
+title("Mean cost per year across the US due to 
+      damage caused by different event types", outer =TRUE)
+```
+
+
+Floods cause the most damage to property and drought causes the most crop damage. Hurrican (Typhoon) causes a lot of damage to both. 
+
